@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotify Song Extractor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <h1>Spotify Song Extractor Dashboard</h1>
+
+    <h2>Processed Movies</h2>
+    <ul id="movie-list"></ul>
+
+    <h2>Download CSV Files</h2>
+    <ul id="file-list"></ul>
+
+    <script>
+        async function fetchProcessedMovies() {
+            const response = await fetch('/progress');
+            const data = await response.json();
+            const list = document.getElementById('movie-list');
+            list.innerHTML = "";
+            data.movies.forEach(movie => {
+                const li = document.createElement('li');
+                li.textContent = movie;
+                list.appendChild(li);
+            });
+        }
+
+        async function fetchFiles() {
+            const response = await fetch('/files');
+            const data = await response.json();
+            const list = document.getElementById('file-list');
+            list.innerHTML = "";
+            data.files.forEach(file => {
+                const li = document.createElement('li');
+                const link = document.createElement('a');
+                link.href = `/download/${file}`;
+                link.textContent = file;
+                link.setAttribute("download", file);
+                li.appendChild(link);
+                list.appendChild(li);
+            });
+        }
+
+        fetchProcessedMovies();
+        fetchFiles();
+    </script>
+</body>
+</html>
