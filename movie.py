@@ -123,5 +123,5 @@ def download_file(language):
     filename = f"{language.lower()}_movies.csv"
     return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)  # Render requires a web service running
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)  # Render requires a web service running
