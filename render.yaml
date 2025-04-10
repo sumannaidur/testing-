@@ -3,7 +3,7 @@ services:
     name: spotify-song-extractor
     env: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python movie.py"
+    startCommand: "gunicorn -w 4 -b 0.0.0.0:$PORT movie:app"
     envVars:
       - key: FLASK_ENV
         value: production
