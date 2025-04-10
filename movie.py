@@ -3,13 +3,13 @@ import pandas as pd
 import time
 import os
 import logging
-from flask import Flask, send_file
-
-# Initialize Flask app
-app = Flask(__name__)
+from flask import Flask, send_from_directory
 
 # API Key
 API_KEY = '51a322139dc6ff44903e5da693008149'  # Replace with your TMDb API key
+
+# Flask App
+app = Flask(__name__)
 
 # Constants
 BASE_URL = 'https://api.themoviedb.org/3/discover/movie'
@@ -107,23 +107,17 @@ def fetch_movies(lang_code, lang_name):
     df.to_csv(filepath, index=False)
     logging.info(f"✅ Saved {len(movie_data)} movies to '{filepath}'")
 
-
-# Run the script to fetch movies
+# Run the script
 for code, name in LANGUAGES.items():
     fetch_movies(code, name)
 
-logging.info("\n🎉 All movie details from 2000–2026 saved successfully!")
+logging.info("\n🎉 All movie details from 2000–2026 saved successfully!")  
 
-# Flask Route to Download CSV
-@app.route('/download/<language>', methods=['GET'])
+# Flask Route for Download
+@app.route('/download/<language>')
 def download_file(language):
     filename = f"{language.lower()}_movies.csv"
-    filepath = os.path.join(OUTPUT_FOLDER, filename)
-
-    if os.path.exists(filepath):
-        return send_file(filepath, as_attachment=True)
-    else:
-        return {"error": "File not found"}, 404
+    return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000, debug=True)
+    app.run(host='0.0.0.0', port=10000)  # Render requires a web service running
