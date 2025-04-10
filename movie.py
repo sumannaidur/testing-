@@ -3,6 +3,10 @@ import pandas as pd
 import time
 import os
 import logging
+from flask import Flask, send_file
+
+# Initialize Flask app
+app = Flask(__name__)
 
 # API Key
 API_KEY = '51a322139dc6ff44903e5da693008149'  # Replace with your TMDb API key
@@ -103,8 +107,23 @@ def fetch_movies(lang_code, lang_name):
     df.to_csv(filepath, index=False)
     logging.info(f"✅ Saved {len(movie_data)} movies to '{filepath}'")
 
-# Run the script
+
+# Run the script to fetch movies
 for code, name in LANGUAGES.items():
     fetch_movies(code, name)
 
 logging.info("\n🎉 All movie details from 2000–2026 saved successfully!")
+
+# Flask Route to Download CSV
+@app.route('/download/<language>', methods=['GET'])
+def download_file(language):
+    filename = f"{language.lower()}_movies.csv"
+    filepath = os.path.join(OUTPUT_FOLDER, filename)
+
+    if os.path.exists(filepath):
+        return send_file(filepath, as_attachment=True)
+    else:
+        return {"error": "File not found"}, 404
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000, debug=True)
