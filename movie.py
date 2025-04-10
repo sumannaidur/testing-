@@ -114,6 +114,10 @@ for code, name in LANGUAGES.items():
 logging.info("\n🎉 All movie details from 2000–2026 saved successfully!")  
 
 # Flask Route for Download
+@app.route("/")
+def home():
+    return "App is running!"
+
 @app.route('/download/<language>')
 def download_file(language):
     filename = f"{language.lower()}_movies.csv"
