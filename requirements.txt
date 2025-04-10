@@ -2,3 +2,8 @@ Flask
 spotipy
 pandas
 gunicorn
+request
+pandas
+time
+os
+logging
