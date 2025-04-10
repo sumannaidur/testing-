@@ -3,6 +3,7 @@ import pandas as pd
 import time
 import os
 import logging
+import threading
 from flask import Flask, send_from_directory
 
 # API Key
@@ -107,21 +108,25 @@ def fetch_movies(lang_code, lang_name):
     df.to_csv(filepath, index=False)
     logging.info(f"✅ Saved {len(movie_data)} movies to '{filepath}'")
 
-# Run the script
-for code, name in LANGUAGES.items():
-    fetch_movies(code, name)
+def fetch_all_movies():
+    """Runs movie fetching in the background after the server starts."""
+    logging.info("🚀 Background task: Fetching all movies...")
+    for code, name in LANGUAGES.items():
+        fetch_movies(code, name)
+    logging.info("🎉 All movie details from 2000–2026 saved successfully!")
 
-logging.info("\n🎉 All movie details from 2000–2026 saved successfully!")  
-
-# Flask Route for Download
+# Flask Routes
 @app.route("/")
 def home():
-    return "App is running!"
+    return "✅ App is running! Use /download/<language> to get movie files."
 
 @app.route('/download/<language>')
 def download_file(language):
     filename = f"{language.lower()}_movies.csv"
     return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
+
+# Start the background thread
+threading.Thread(target=fetch_all_movies, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)  # Render requires a web service running
