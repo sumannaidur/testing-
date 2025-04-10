@@ -1,51 +1,72 @@
 import os
-import pandas as pd
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
-from datetime import datetime
 import time
+import spotipy
+import pandas as pd
+import logging
+from spotipy.oauth2 import SpotifyClientCredentials
+from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime  # ✅ FIXED: Import datetime
 
-# Spotify API Credentials (Multiple Sets)
+# Load API credentials from .env file
+load_dotenv()
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, filename="spotify_scraper.log", filemode="a", format="%(asctime)s - %(message)s")
+
+# Rate limit variables
+REQUESTS_MADE = 0
+START_TIME = time.time()
+
+# Spotify API credentials list
 SPOTIFY_CREDENTIALS = [
-    {"client_id": "15adf67aec934fe792bee0d467742326", "client_secret": "d03b2411aad24b8e80f3257660f9f10f"},
-    {"client_id": "241765db513d43218e1e996b7d13d73f", "client_secret": "0fb1d0f0eed44f2e98d0e022335dd9e1"},
-    {"client_id": "56bfb61f27234852826fd13e813174e6", "client_secret": "401f40941cba4f5bb2a0274f9fb34df2"}
+    {"client_id": os.getenv("SPOTIFY_CLIENT_ID_1"), "client_secret": os.getenv("SPOTIFY_CLIENT_SECRET_1")},
+    {"client_id": os.getenv("SPOTIFY_CLIENT_ID_2"), "client_secret": os.getenv("SPOTIFY_CLIENT_SECRET_2")},
+    {"client_id": os.getenv("SPOTIFY_CLIENT_ID_3"), "client_secret": os.getenv("SPOTIFY_CLIENT_SECRET_3")}
 ]
 
-# Track the active credential index
-credential_index = 0
+credential_index = 0  # Track which API key is in use
+sp = None  # Global Spotify client instance
 
+# Initialize Spotify Client
 def get_spotify_client():
-    """Initialize and return a Spotify client using the current credentials."""
-    global credential_index
     creds = SPOTIFY_CREDENTIALS[credential_index]
-    client_credentials_manager = SpotifyClientCredentials(
-        client_id=creds["client_id"],
-        client_secret=creds["client_secret"]
-    )
-    return spotipy.Spotify(client_credentials_manager=client_credentials_manager)
+    return spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=creds["client_id"], client_secret=creds["client_secret"]))
 
-# Initialize the first Spotify client
+# Initialize the first client
 sp = get_spotify_client()
 
-# Input and Output Paths
-MOVIE_CSV_FOLDER = "movie_csvs"
-OUTPUT_FOLDER = "output_songs"
-PROGRESS_FILE = "processed_movies.txt"  # Track processed movies
+# Rate Limiter
+def rate_limiter():
+    global REQUESTS_MADE, START_TIME
+    REQUESTS_MADE += 1
+    elapsed_time = time.time() - START_TIME
 
-# Ensure output base folder exists
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    if REQUESTS_MADE >= 175:  # Buffer before hitting 180 limit
+        sleep_time = 60 - elapsed_time  # Wait for 60 sec rolling window
+        if sleep_time > 0:
+            logging.info(f"Rate limit nearing! Sleeping for {round(sleep_time, 2)} seconds...")
+            time.sleep(sleep_time)
+        
+        # Reset counter after sleep
+        REQUESTS_MADE = 0
+        START_TIME = time.time()
 
+# Switch Spotify Credentials
 def switch_spotify_client():
-    """Switch to the next set of Spotify API credentials when rate-limited."""
     global credential_index, sp
+    logging.warning("Rate limit reached! Retrying in 10 seconds before switching credentials...")
+    time.sleep(10)  # Avoid immediate bans before switching
+
     credential_index = (credential_index + 1) % len(SPOTIFY_CREDENTIALS)
     sp = get_spotify_client()
-    print(f"Switched to Spotify credentials set {credential_index + 1}")
+    logging.info(f"Switched to Spotify credentials set {credential_index + 1}")
 
+# Search for a movie album on Spotify
 def search_album_on_spotify(movie_name, year, language):
-    """Search for the movie album on Spotify using movie name, release year, and language."""
+    """Search for the movie album on Spotify."""
     try:
+        rate_limiter()
         search_query = f"{movie_name} {year} {language} soundtrack"
         results = sp.search(q=search_query, type="album", limit=5)
 
@@ -58,99 +79,105 @@ def search_album_on_spotify(movie_name, year, language):
 
     except spotipy.exceptions.SpotifyException as e:
         if e.http_status == 429:
-            print("Rate limit reached! Switching credentials...")
             switch_spotify_client()
             return search_album_on_spotify(movie_name, year, language)
         else:
-            print(f"Spotify API error for {movie_name} ({year}, {language}): {e}")
+            logging.error(f"Spotify API error for {movie_name}: {e}")
 
     return None
 
+# Fetch multiple track details efficiently
 def get_songs_from_album(album_id, movie_name):
-    """Fetch song metadata from Spotify album ID."""
+    """Fetch multiple song details efficiently."""
     songs_data = []
+
     if album_id:
         try:
+            rate_limiter()
             tracks = sp.album_tracks(album_id)
-            for track in tracks["items"]:
-                song_meta = sp.track(track["id"])
-                songs_data.append({
-                    "Movie": movie_name,
-                    "Song Name": song_meta["name"],
-                    "Album": song_meta["album"]["name"],
-                    "Artist": ", ".join([artist["name"] for artist in song_meta["artists"]]),
-                    "Spotify ID": song_meta["id"],
-                    "Release Date": song_meta["album"]["release_date"],
-                    "Popularity": song_meta["popularity"]
-                })
+            track_ids = [track["id"] for track in tracks["items"]]
+
+            for i in range(0, len(track_ids), 50):
+                rate_limiter()
+                track_details = sp.tracks(track_ids[i:i+50])["tracks"]
+
+                for song_meta in track_details:
+                    songs_data.append({
+                        "Movie": movie_name,
+                        "Song Name": song_meta["name"],
+                        "Album": song_meta["album"]["name"],
+                        "Artist": ", ".join([artist["name"] for artist in song_meta["artists"]]),
+                        "Spotify ID": song_meta["id"],
+                        "Release Date": song_meta["album"]["release_date"],
+                        "Popularity": song_meta["popularity"]
+                    })
         except Exception as e:
-            print(f"Error fetching songs from album {album_id}: {e}")
+            logging.error(f"Error fetching songs from album {album_id}: {e}")
+
     return songs_data
 
-def save_progress(processed_movies):
-    """Save processed movie names to a progress file."""
-    with open(PROGRESS_FILE, "w") as f:
-        for movie in processed_movies:
-            f.write(movie + "\n")
+# Save progress
+def save_progress(processed_movies, filename="processed_movies.txt"):
+    """Save processed movies to a file to avoid duplicate processing."""
+    with open(filename, "w") as file:
+        file.write("\n".join(processed_movies))
 
-def load_progress():
-    """Load processed movie names from the progress file."""
-    if os.path.exists(PROGRESS_FILE):
-        with open(PROGRESS_FILE, "r") as f:
-            return set(line.strip() for line in f)
-    return set()
-
+# Process a single CSV file
 def process_movie_csv(file_path, processed_movies):
     """Process each movie CSV file and collect song details."""
+    print(f"📂 Processing file: {file_path}")  # NEW DEBUG PRINT
+    
     df = pd.read_csv(file_path)
     df.columns = df.columns.str.strip()
 
     for _, row in df.iterrows():
         movie_name = row["Title"]
+        print(f"🎬 Processing movie: {movie_name}")  # NEW DEBUG PRINT
+
         if movie_name in processed_movies:
-            print(f"Skipping {movie_name} (already processed)")
-            continue  # Skip already processed movies
+            print(f"⏩ Skipping {movie_name} (already processed)")
+            continue
 
         try:
             year = datetime.strptime(str(row["Release Date"]), "%d-%m-%Y").year
         except ValueError:
-            print(f"Invalid date format for movie {movie_name}")
+            print(f"⚠️ Invalid date format for movie: {movie_name}")
             continue
-        
+
         language = row["Language"]
-
-        year_folder = os.path.join(OUTPUT_FOLDER, str(year))
-        language_folder = os.path.join(year_folder, language)
-        os.makedirs(language_folder, exist_ok=True)
-
-        output_file = os.path.join(language_folder, f"{year}_{language}.csv")
+        print(f"🔍 Searching for: {movie_name} ({year}, {language})")  # NEW DEBUG PRINT
 
         album_id = search_album_on_spotify(movie_name, year, language)
 
         if album_id:
+            print(f"✅ Album found for {movie_name} - ID: {album_id}")  # NEW DEBUG PRINT
             songs = get_songs_from_album(album_id, movie_name)
-
             if songs:
-                df_songs = pd.DataFrame(songs)
-                if os.path.exists(output_file):
-                    df_songs.to_csv(output_file, mode='a', index=False, header=False)
-                else:
-                    df_songs.to_csv(output_file, index=False)
-                print(f"Updated: {output_file}")
+                print(f"🎵 Found {len(songs)} songs for {movie_name}")
             else:
-                print(f"No songs found for {movie_name}")
+                print(f"❌ No songs found for {movie_name}")
         else:
-            print(f"No album found for: {movie_name}")
+            print(f"❌ No album found for {movie_name}")
 
         processed_movies.add(movie_name)
-        save_progress(processed_movies)
+        save_progress(processed_movies)  # ✅ FIXED: Now properly defined
 
-# Load progress before starting
-processed_movies = load_progress()
+# Process all CSV files in parallel
+def process_all_csv_files():
+    MOVIE_CSV_FOLDER = "movie_csvs"
+    csv_files = [os.path.join(MOVIE_CSV_FOLDER, f) for f in os.listdir(MOVIE_CSV_FOLDER) if f.endswith(".csv")]
 
-# Process all CSV files
-for csv_file in os.listdir(MOVIE_CSV_FOLDER):
-    if csv_file.endswith(".csv"):
-        process_movie_csv(os.path.join(MOVIE_CSV_FOLDER, csv_file), processed_movies)
+    if not csv_files:
+        print("❌ No CSV files found in 'movie_csvs' folder!")
+        return
 
-print("Data collection completed!")
+    print(f"✅ Found {len(csv_files)} CSV files. Processing now...")
+
+    processed_movies = set()
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        executor.map(process_movie_csv, csv_files, [processed_movies] * len(csv_files))
+
+if __name__ == "__main__":
+    print("🚀 Starting Spotify Data Extraction...")
+    process_all_csv_files()
+    print("🎉 Done!") 
