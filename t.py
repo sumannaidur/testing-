@@ -81,37 +81,70 @@ def download_song_youtube(song_name, artist_name, save_path="downloads"):
             print(f"❌ Failed to download {song_name} - {artist_name}: {e}")
             return None
 
+
+
 def extract_audio_features(file_path):
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 10000:
             raise Exception("File is invalid or too small")
-        y, sr = librosa.load(file_path)
+        
+        y, sr = librosa.load(file_path, sr=None)  # Load with original sample rate
+        
+        # Compute features
         duration = librosa.get_duration(y=y, sr=sr)
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
+        rms = librosa.feature.rms(y=y)
+        zcr = librosa.feature.zero_crossing_rate(y=y)
+        spec_contrast = librosa.feature.spectral_contrast(y=y, sr=sr)
+        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
+        rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)
+        harmonic = librosa.effects.harmonic(y)
+        percussive = librosa.effects.percussive(y)
+
+        # Convert loudness to dB scale (Spotify uses -60 to 0 dB)
+        loudness = np.mean(librosa.amplitude_to_db(rms))  
+        loudness = max(-60, min(0, loudness))  # Clamp between -60 and 0 dB
+
+        # Normalize values where needed
+        def normalize(value, min_val, max_val):
+            return max(0.0, min(1.0, (value - min_val) / (max_val - min_val))) if max_val > min_val else 0.0
+
         features = {
-            "length": duration,
-            "tempo": tempo,
-            "danceability": np.mean(librosa.feature.tempogram(y=y, sr=sr)),
-            "acousticness": np.mean(librosa.feature.rms(y=y)),
-            "energy": np.mean(librosa.feature.melspectrogram(y=y, sr=sr)),
-            "instrumentalness": np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr)),
-            "liveness": np.mean(librosa.feature.spectral_flatness(y=y)),
-            "valence": np.mean(librosa.feature.zero_crossing_rate(y)),
-            "loudness": np.mean(librosa.feature.rms(y=y)),
-            "speechiness": np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)),
-            "key": np.argmax(np.mean(librosa.feature.chroma_stft(y=y, sr=sr), axis=1)),
-            "time_signature": 4
+            "duration_ms": int(duration * 1000),
+            "tempo": float(tempo),  # Ensure it's a single float
+            "danceability": normalize(np.std(np.diff(librosa.feature.tempogram(y=y, sr=sr))), 0, 0.5),
+            "acousticness": normalize(np.mean(zcr), 0, 0.2),  # Normalize ZCR
+            "energy": normalize(np.mean(rms), 0, 0.1),  # Normalize RMS
+            "instrumentalness": normalize(np.mean(harmonic) / (np.mean(percussive) + 1e-6), 0, 10),
+            "liveness": normalize(np.mean(spec_contrast), 0, 2),
+            "loudness": loudness,  # Already in correct range
+            "speechiness": normalize(np.var(chroma), 0, 1.0),  # Fixed normalization
+            "valence": normalize(np.mean(spectral_centroid) / (np.max(spectral_centroid) + 1e-6), 0, 1),  
+            "key": int(np.argmax(np.mean(chroma, axis=1))),  
+            "mode": int(np.argmax(np.mean(chroma, axis=1)) in [0, 2, 4, 5, 7, 9, 11]),  
+            "time_signature": min(max(3, len(librosa.onset.onset_detect(y=y, sr=sr))), 7)  
         }
+
         return features
     except Exception as e:
         print(f"❌ Error extracting audio features: {e}")
         return None
 
-def search_album_on_spotify(movie_name, year, language):
+
+
+
+def search_album_on_spotify(movie_name, year, language, hero=None, heroine=None):
     try:
         rate_limiter()
-        search_query = f"{movie_name} {year} {language} soundtrack"
-        results = sp.search(q=search_query, type="album", limit=5)
+        search_terms = f"{movie_name} {year} {language} soundtrack"
+        
+        if hero:
+            search_terms += f" {hero}"
+        if heroine:
+            search_terms += f" {heroine}"
+        
+        results = sp.search(q=search_terms, type="album", limit=5)
         if results["albums"]["items"]:
             for album in results["albums"]["items"]:
                 album_name = album["name"].lower()
@@ -121,10 +154,11 @@ def search_album_on_spotify(movie_name, year, language):
     except spotipy.exceptions.SpotifyException as e:
         if e.http_status == 429:
             switch_spotify_client()
-            return search_album_on_spotify(movie_name, year, language)
+            return search_album_on_spotify(movie_name, year, language, hero, heroine)
         else:
             logging.error(f"Spotify API error for {movie_name}: {e}")
     return None
+
 
 def get_songs_from_album(album_id, movie_name):
     songs_data = []
@@ -160,7 +194,7 @@ def get_songs_from_album(album_id, movie_name):
 
 def save_progress(processed_movies, filename="processed_movies.txt"):
     with open(filename, "w") as file:
-        file.write("\\n".join(processed_movies))
+        file.write("\n".join(processed_movies))
 
 def process_movie_csv(file_path, processed_movies):
     print(f"📂 Processing file: {file_path}")
@@ -179,8 +213,18 @@ def process_movie_csv(file_path, processed_movies):
         songs = get_songs_from_album(album_id, movie_name)
         if songs:
             output_df = pd.DataFrame(songs)
-            output_file = f"output/{sanitize_filename(movie_name.replace(' ', '_'))}_songs.csv"
-            os.makedirs("output", exist_ok=True)
+
+            # Create folder path: output/<language>/<year>
+            folder_path = os.path.join("output", sanitize_filename(language), str(year))
+            os.makedirs(folder_path, exist_ok=True)
+
+            # Save all songs of the year+language to a single CSV
+            output_file = os.path.join(folder_path, "songs.csv")
+
+            if os.path.exists(output_file):
+                existing_df = pd.read_csv(output_file)
+                output_df = pd.concat([existing_df, output_df], ignore_index=True)
+
             output_df.to_csv(output_file, index=False)
         processed_movies.add(movie_name)
         save_progress(processed_movies)
