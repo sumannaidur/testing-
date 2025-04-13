@@ -76,7 +76,7 @@ def sanitize_filename(name):
     logging.debug(f"Sanitized filename: {name} -> {sanitized}")
     return sanitized
 
-def download_song_youtube(song_name, artist_name, save_path="downloads"):
+def download_song_youtube(song_name, artist_name, save_path="downloads", cookies_file=None):
     os.makedirs(save_path, exist_ok=True)
     query = f"{song_name} {artist_name} audio"
     sanitized_song = sanitize_filename(song_name)
@@ -98,6 +98,9 @@ def download_song_youtube(song_name, artist_name, save_path="downloads"):
             'preferredquality': '192',
         }],
     }
+    
+    if cookies_file:
+        ydl_opts['cookies'] = cookies_file  # Add the cookies file to the options
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -114,6 +117,7 @@ def download_song_youtube(song_name, artist_name, save_path="downloads"):
         print(f"❌ Failed to download {song_name} - {artist_name}: {e}")
         logging.error(f"Download failed for {song_name} - {artist_name}: {e}")
         return None
+
 
 
 def convert_mp3_to_wav(mp3_path):
