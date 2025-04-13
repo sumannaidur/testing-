@@ -76,7 +76,7 @@ def sanitize_filename(name):
     logging.debug(f"Sanitized filename: {name} -> {sanitized}")
     return sanitized
 
-def download_song_youtube(song_name, artist_name, save_path="downloads", cookies_file=None):
+def download_song_youtube(song_name, artist_name, save_path="downloads", cookie_path="youtube_cookies.txt"):
     os.makedirs(save_path, exist_ok=True)
     query = f"{song_name} {artist_name} audio"
     sanitized_song = sanitize_filename(song_name)
@@ -91,6 +91,7 @@ def download_song_youtube(song_name, artist_name, save_path="downloads", cookies
         'format': 'bestaudio/best',
         'noplaylist': True,
         'quiet': True,
+        'cookies': 'youtube_cookies.txt',
         'outtmpl': os.path.join(save_path, filename),
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
@@ -98,9 +99,6 @@ def download_song_youtube(song_name, artist_name, save_path="downloads", cookies
             'preferredquality': '192',
         }],
     }
-    
-    if cookies_file:
-        ydl_opts['cookies'] = cookies_file  # Add the cookies file to the options
 
     try:
         with YoutubeDL(ydl_opts) as ydl:

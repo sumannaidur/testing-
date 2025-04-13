@@ -10,14 +10,13 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      WIND_USERNAME: ${{ secrets.WIND_USERNAME }}
-      WIND_PASSWORD: ${{ secrets.WIND_PASSWORD }}
       SPOTIFY_CLIENT_ID_1: ${{ secrets.SPOTIFY_CLIENT_ID_1 }}
       SPOTIFY_CLIENT_SECRET_1: ${{ secrets.SPOTIFY_CLIENT_SECRET_1 }}
       SPOTIFY_CLIENT_ID_2: ${{ secrets.SPOTIFY_CLIENT_ID_2 }}
       SPOTIFY_CLIENT_SECRET_2: ${{ secrets.SPOTIFY_CLIENT_SECRET_2 }}
       SPOTIFY_CLIENT_ID_3: ${{ secrets.SPOTIFY_CLIENT_ID_3 }}
       SPOTIFY_CLIENT_SECRET_3: ${{ secrets.SPOTIFY_CLIENT_SECRET_3 }}
+
 
     steps:
       - name: Checkout repo
@@ -38,10 +37,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y windscribe-cli
 
-      - name: Connect to Windscribe VPN
+      - name: Decode cookies.txt
+        env:
+          COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
         run: |
-          windscribe login --username "$sumannaidur" --password "$M)$pB#+D/3/n&+8"
-          windscribe connect best
+          echo "$COOKIES_B64" | base64 -d > youtube_cookies.txtt
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
