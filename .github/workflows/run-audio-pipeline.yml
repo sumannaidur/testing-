@@ -1,0 +1,36 @@
+name: Run Spotify Scraper
+
+on:
+  workflow_dispatch:  # manual trigger
+  schedule:
+    - cron: '0 2 * * *'  # runs every day at 2 AM UTC
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    env:
+      SPOTIFY_CLIENT_ID_1: ${{ secrets.SPOTIFY_CLIENT_ID_1 }}
+      SPOTIFY_CLIENT_SECRET_1: ${{ secrets.SPOTIFY_CLIENT_SECRET_1 }}
+      SPOTIFY_CLIENT_ID_2: ${{ secrets.SPOTIFY_CLIENT_ID_2 }}
+      SPOTIFY_CLIENT_SECRET_2: ${{ secrets.SPOTIFY_CLIENT_SECRET_2 }}
+      SPOTIFY_CLIENT_ID_3: ${{ secrets.SPOTIFY_CLIENT_ID_3 }}
+      SPOTIFY_CLIENT_SECRET_3: ${{ secrets.SPOTIFY_CLIENT_SECRET_3 }}
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install FFmpeg
+      run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+
+    - name: Run the script
+      run: python main.py
