@@ -22,6 +22,10 @@ jobs:
           sudo apt-get install -y ffmpeg
           pip install -r requirements.txt
 
+      - name: 🔐 Decode and restore youtube cookies
+        run: |
+          echo "${{ secrets.YOUTUBE_COOKIES_B64 }}" | base64 -d > youtube_cookies.txt
+
       - name: 🔐 Set environment variables
         run: |
           echo "SPOTIFY_CLIENT_ID_1=${{ secrets.SPOTIFY_CLIENT_ID_1 }}" >> .env
