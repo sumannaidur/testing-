@@ -14,7 +14,7 @@ from pydub import AudioSegment
 from filelock import FileLock
 import lyricsgenius
 from difflib import SequenceMatcher
-
+import re
 # Load API credentials
 load_dotenv()
 
@@ -71,7 +71,6 @@ def switch_spotify_client():
     logging.info(f"Switched to Spotify credentials set {credential_index + 1}")
 
 def sanitize_filename(name):
-    import re
     sanitized = re.sub(r'[\\\\/*?:"<>|]', "", name)
     logging.debug(f"Sanitized filename: {name} -> {sanitized}")
     return sanitized

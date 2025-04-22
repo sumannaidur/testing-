@@ -1,0 +1,11 @@
+spotipy
+pandas
+python-dotenv
+yt-dlp
+librosa
+numpy
+tqdm
+pydub
+filelock
+lyricsgenius
+ffmpeg-python
