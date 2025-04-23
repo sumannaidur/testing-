@@ -75,26 +75,44 @@ def sanitize_filename(name):
     logging.debug(f"Sanitized filename: {name} -> {sanitized}")
     return sanitized
 
+import webbrowser
+
 def download_song_youtube(song_name, artist_name, save_path="downloads", cookie_path="youtube_cookies.txt"):
+    global REQUESTS_MADE  # To ensure rate limiting works globally
     os.makedirs(save_path, exist_ok=True)
     query = f"{song_name} {artist_name} audio"
     sanitized_song = sanitize_filename(song_name)
     sanitized_artist = sanitize_filename(artist_name)
     filename = f"{sanitized_song} - {sanitized_artist}.%(ext)s"
     full_output_path = os.path.join(save_path, filename.replace("%(ext)s", "mp3"))
+
     print(f"🔍 Attempting to download: {song_name} by {artist_name}")
     logging.info(f"Downloading YouTube audio: Query='{query}' | Output='{full_output_path}'")
+
+    # Call your custom rate limiter here
+    rate_limiter()
+
+    # Check cookie file
+    if not os.path.exists(cookie_path):
+        print(f"⚠️ Warning: Cookie file not found → {cookie_path}")
+        logging.warning(f"Cookie file not found: {cookie_path}")
+    else:
+        print(f"🍪 Using cookies file: {cookie_path}")
+        logging.info(f"Using cookies from: {cookie_path}")
+
     ydl_opts = {
         'format': 'bestaudio/best',
         'noplaylist': True,
         'quiet': True,
-        'cookies': 'youtube_cookies.txt',
+        'cookies': cookie_path,
         'outtmpl': os.path.join(save_path, filename),
-        'postprocessors': [{'key': 'FFmpegExtractAudio',
-                            'preferredcodec': 'mp3',
-                            'preferredquality': '192',
-                            }],
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
     }
+
     try:
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([f"ytsearch1:{query}"])
@@ -106,10 +124,22 @@ def download_song_youtube(song_name, artist_name, save_path="downloads", cookie_
             print(f"❌ File not found after download: {full_output_path}")
             logging.warning(f"File missing after YouTubeDL process: {full_output_path}")
             return None
+
     except Exception as e:
-        print(f"❌ Failed to download {song_name} - {artist_name}: {e}")
-        logging.error(f"Download failed for {song_name} - {artist_name}: {e}")
+        err_msg = str(e)
+        print(f"❌ Failed to download {song_name} - {artist_name}: {err_msg}")
+        logging.error(f"Download failed for {song_name} - {artist_name}: {err_msg}")
+
+        # Detect YouTube login prompt
+        if "Sign in to confirm" in err_msg:
+            print("🔐 YouTube is asking for login. Opening browser...")
+            search_url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
+            webbrowser.open(search_url)
+            input("⏳ After logging in and verifying, press Enter here to retry download...")
+            return download_song_youtube(song_name, artist_name, save_path, cookie_path)
+
         return None
+
 def convert_mp3_to_wav(mp3_path):
     wav_path = mp3_path.replace(".mp3", ".wav")
     print(f"🔄 Converting MP3 to WAV: {mp3_path} ➡ {wav_path}")
