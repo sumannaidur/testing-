@@ -12,17 +12,18 @@ from tqdm import tqdm
 import os
 from pydub import AudioSegment
 from filelock import FileLock
-import lyricsgenius
 from difflib import SequenceMatcher
 import re
-import google.generativeai as genai
+import webbrowser
+from google import genai
 from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
-
+import joblib
 # Load API credentials
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY")) 
-GENIUS_TOKEN = "VlwXDvo5O8sybpEZ2Vfn8DCnDthcgs8IghLHPmX7I0FUshz6fwh0yIYYBF5hN7-3"  # Replace with your Genius token
-genius = lyricsgenius.Genius(GENIUS_TOKEN, skip_non_songs=True, excluded_terms=["(Remix)", "(Live)"])
+
+if not os.getenv("GEMINI_API_KEY"):
+    raise EnvironmentError("GEMINI_API_KEY not set. Please add it to your .env file.")
+
 logging.basicConfig(
     level=logging.DEBUG,  # <- changed from INFO to DEBUG
     filename="spotify_scraper.log",filemode="a",format="%(asctime)s - %(levelname)s - %(message)s"
@@ -77,8 +78,6 @@ def sanitize_filename(name):
     sanitized = re.sub(r'[\\\\/*?:"<>|]', "", name)
     logging.debug(f"Sanitized filename: {name} -> {sanitized}")
     return sanitized
-
-import webbrowser
 
 def download_song_youtube(song_name, artist_name, save_path="downloads", cookie_path="youtube_cookies.txt"):
     global REQUESTS_MADE  # To ensure rate limiting works globally
@@ -162,6 +161,18 @@ def convert_mp3_to_wav(mp3_path):
         print(f"❌ Failed to convert {mp3_path} to WAV: {e}")
         logging.error(f"Error converting {mp3_path} to WAV: {e}")
         return None
+
+def predict_mood_from_audio_features(features_dict):
+    try:
+        clf = joblib.load("mood_classifier.pkl")
+        le = joblib.load("label_encoder.pkl")
+        df = pd.DataFrame([features_dict])
+        prediction = clf.predict(df)[0]
+        return le.inverse_transform([prediction])[0]
+    except Exception as e:
+        logging.warning(f"⚠ Error predicting mood from features: {e}")
+        return "unknown"
+       
 def extract_audio_features(file_path):
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 10000:
@@ -219,8 +230,6 @@ def extract_audio_features(file_path):
         print(f"❌ Error extracting audio features from {file_path}: {e}")
         return None
 
-from difflib import SequenceMatcher
-
 def similarity(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
@@ -243,7 +252,6 @@ def match_album_heuristic(album, movie_name, year, language, music_director, her
         score += 2
     elif name_score >= 0.75:
         score += 1
-
     if artist_match or hero_match:
         score += 1
     if year_match:
@@ -256,7 +264,6 @@ def match_album_heuristic(album, movie_name, year, language, music_director, her
 def search_album_on_spotify(movie_name, year, language, music_director=None, hero=None, market="IN"):
     try:
         rate_limiter()
-
         search_phrases = [
             f"{movie_name} {year} {language} {music_director or ''}",
             f"{movie_name} {year} {language} {hero or ''}",
@@ -264,7 +271,6 @@ def search_album_on_spotify(movie_name, year, language, music_director=None, her
             f"{movie_name} {year}",
             movie_name
         ]
-
         for query in search_phrases:
             print(f"🔍 Spotify Search Query: {query}")
             logging.info(f"Spotify Search: {query}")
@@ -320,94 +326,121 @@ def search_album_on_spotify(movie_name, year, language, music_director=None, her
         logging.error(f"Unexpected error: {e}")
         return None
 
-def sanitize_filename(name):
-    # Remove characters that are invalid in filenames
-    return "".join(c for c in name if c.isalnum() or c in " _-").rstrip()
+def fetch_mood_from_gemini_only(song_name, artist_name):
+
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    model_id = "gemini-2.0-flash"
+    tool = Tool(google_search=GoogleSearch())
+
+    prompts = [
+        f"What is the mood (choose from [happy, sad, energetic, calm]) of the song '{song_name}' by '{artist_name}'? Just return one mood word.",
+        f"Classify the mood of the song '{song_name}' by '{artist_name}'. Only respond with one word from [happy, sad, energetic, calm].",
+        f"Which one best describes the mood of the song '{song_name}' by '{artist_name}': happy, sad, energetic, or calm? Just the word."
+    ]
+
+    print("🧠 Attempting Gemini mood classification...")
+
+    for attempt, prompt in enumerate(prompts, start=1):
+        print(f"🔁 Attempt {attempt}: {prompt}")
+        try:
+            response = client.models.generate_content(
+                model=model_id,
+                contents=prompt,
+                config=GenerateContentConfig(
+                    tools=[tool],
+                    response_modalities=["TEXT"]
+                )
+            )
+            if response.candidates and response.candidates[0].content.parts:
+                text = "\n".join(
+                    part.text for part in response.candidates[0].content.parts if hasattr(part, "text")
+                )
+                for mood in ["happy", "sad", "energetic", "calm"]:
+                    if mood in text.lower():
+                        print(f"🎯 Identified mood: {mood}")
+                        return mood
+        except Exception as e:
+            logging.warning(f"⚠ Gemini mood fetch attempt {attempt} failed: {e}")
+
+    logging.warning("❌ All Gemini mood prompt attempts failed.")
+    return "unknown"
+
+def log_missing_lyrics(song_name, artist_name, album_name):
+    folder = os.path.join("lyrics", "missing")
+    os.makedirs(folder, exist_ok=True)
+    file_path = os.path.join(folder, "missing_lyrics.txt")
+    with open(file_path, "a", encoding="utf-8") as f:
+        f.write(f"{song_name} | {artist_name} | {album_name}\n")
+
+def fetch_lyrics_from_gemini_only(song_name, artist_name):
+    
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    model_id = "gemini-2.0-flash"
+    tool = Tool(google_search=GoogleSearch())
+
+    prompts = [
+        f"Get the full lyrics of the song '{song_name}' by '{artist_name}'. Only return the lyrics.",
+        f"Provide complete lyrics for '{song_name}' performed by '{artist_name}' without any explanation or extra details.",
+        f"Give me only the song lyrics of '{song_name}' by '{artist_name}' as plain text, no intro or summary."
+    ]
+    print("🎤 Attempting Gemini lyrics search...")
+    # Phrases indicating no/full lyrics are unavailable
+    rejection_phrases = [
+        "i'm sorry",
+        "i am sorry",
+        "i cannot provide",
+        "i couldn’t find",
+        "no lyrics available",
+        "unable to provide",
+        "due to copyright",
+        "limitations in the search",
+        "here is a snippet",
+        "partial lyrics",
+        "not the full lyrics"
+    ]
+    for attempt, prompt in enumerate(prompts, start=1):
+        print(f"🔁 Attempt {attempt}: {prompt}")
+        try:
+            response = client.models.generate_content(
+                model=model_id,
+                contents=prompt,
+                config=GenerateContentConfig(
+                    tools=[tool],
+                    response_modalities=["TEXT"]
+                )
+            )
+            if response.candidates and response.candidates[0].content.parts:
+                lyrics = "\n".join(
+                    part.text for part in response.candidates[0].content.parts if hasattr(part, "text")
+                ).strip()
+
+                # Check for any disqualifying phrase
+                if any(phrase in lyrics.lower() for phrase in rejection_phrases):
+                    print(lyrics)
+                    print("⚠ Gemini returned a non-lyrical or incomplete response. Skipping save.")
+                    return ""
+
+                print("✅ Got full lyrics")
+                return lyrics
+        except Exception as e:
+            logging.warning(f"⚠ Gemini lyrics fetch attempt {attempt} failed: {e}")
+
+    logging.warning("❌ All Gemini lyrics prompt attempts failed.")
+    return ""
 
 def save_lyrics(lyrics, album_name, song_name):
     try:
-        folder_name = os.path.join("lyrics", sanitize_filename(album_name))
-        os.makedirs(folder_name, exist_ok=True)
-        file_path = os.path.join(folder_name, f"{sanitize_filename(song_name)}.txt")
+        folder = os.path.join("lyrics", sanitize_filename(album_name))
+        os.makedirs(folder, exist_ok=True)
+        file_path = os.path.join(folder, f"{sanitize_filename(song_name)}.txt")
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write(lyrics)
-        logging.info(f"💾 Saved lyrics: {file_path}")
+            f.write(lyrics.strip())
+        logging.info(f"💾 Saved lyrics to {file_path}")
     except Exception as e:
-        logging.error(f"❌ Failed to save lyrics for {song_name}: {e}")
+        logging.error(f"❌ Error saving lyrics: {e}")
 
-def fetch_lyrics_and_mood_from_gemini(song_name, artist_name):
-    try:
-        print("🔮 Using Gemini for lyrics and mood")
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        print(client)
-        model_id = "gemini-2.0-flash"
-        google_search_tool = Tool(google_search=GoogleSearch())
-
-        prompt = f"""
-Get the full lyrics and mood (from [happy, sad, energetic, calm]) of the song '{song_name}' by '{artist_name}'.
-Respond in this format:
-
-Mood: <one of happy, sad, energetic, calm>
-Lyrics:
-<lyrics here>
-"""
-
-        response = client.models.generate_content(
-            model=model_id,
-            contents=prompt.strip(),
-            config=GenerateContentConfig(
-                tools=[google_search_tool],
-                response_modalities=["TEXT"],
-            )
-        )
-
-        if response.candidates and response.candidates[0].content.parts:
-            full_text = "\n".join(
-                part.text for part in response.candidates[0].content.parts if hasattr(part, 'text')
-            )
-            mood = None
-            lyrics_lines = []
-            for line in full_text.splitlines():
-                if line.lower().startswith("mood:"):
-                    mood = line.split(":", 1)[1].strip().lower()
-                elif "lyrics" in line.lower():
-                    continue
-                else:
-                    lyrics_lines.append(line)
-            lyrics = "\n".join(lyrics_lines).strip()
-            print(lyrics)
-            print(mood)
-            return lyrics, mood
-        else:
-            logging.warning("⚠ Gemini returned no content.")
-            return "", ""
-
-    except Exception as e:
-        logging.warning(f"⚠ Gemini error for '{song_name}': {e}")
-        return "", ""
-
-def fetch_lyrics_and_mood(song_name, artist_name, album_name):
-    try:
-        song = genius.search_song(title=song_name, artist=artist_name)
-        if song and song.lyrics:
-            logging.info("📜 Got lyrics from Genius")
-            save_lyrics(song.lyrics, album_name, song_name)
-            return song.lyrics, None  # No mood from Genius
-        else:
-            logging.warning(f"⚠ Genius failed for '{song_name}', using Gemini...")
-    except Exception as e:
-        logging.warning(f"⚠ Genius exception for '{song_name}': {e}")
-
-    lyrics, mood = fetch_lyrics_and_mood_from_gemini(song_name, artist_name)
-    if lyrics:
-        logging.info("📜 Got lyrics from Gemini")
-        save_lyrics(lyrics, album_name, song_name)
-    return lyrics, mood
-
-
-def get_songs_from_album(album_id, movie_name):
+def get_songs_from_album(album_id, movie_name, use_separate_lyrics_and_mood=False):
     songs_data = []
-
     if not album_id:
         logging.warning(f"⚠ Skipping: No album ID for '{movie_name}'")
         return songs_data
@@ -419,57 +452,63 @@ def get_songs_from_album(album_id, movie_name):
 
         for i in tqdm(range(0, len(track_ids), 50), desc=f"🎵 {movie_name}", unit="batch"):
             rate_limiter()
-            track_details = sp.tracks(track_ids[i:i + 50])["tracks"]
+            track_details = sp.tracks(track_ids[i:i+50])["tracks"]
 
             for song_meta in track_details:
                 song_name = song_meta["name"]
                 artist_name = song_meta["artists"][0]["name"]
+                album_name = song_meta["album"]["name"]  # ✅ define album_name
                 logging.info(f"🎧 Processing: {song_name} by {artist_name}")
 
-                audio_file = wav_file = None
+                audio_file = download_song_youtube(song_name, artist_name)
+                if not audio_file:
+                    logging.warning(f"❌ Skipping download failure: {song_name}")
+                    continue
 
-                try:
-                    audio_file = download_song_youtube(song_name, artist_name)
-                    if not audio_file:
-                        logging.warning(f"❌ Skipping download failure: {song_name}")
-                        continue
+                wav_file = convert_mp3_to_wav(audio_file)
+                if not wav_file:
+                    logging.warning(f"❌ Skipping conversion failure: {song_name}")
+                    cleanup_files([audio_file])
+                    continue
 
-                    wav_file = convert_mp3_to_wav(audio_file)
-                    if not wav_file:
-                        logging.warning(f"❌ Skipping conversion failure: {song_name}")
-                        continue
+                audio_features = extract_audio_features(wav_file)
+                if not audio_features:
+                    logging.warning(f"❌ Skipping feature extraction failure: {song_name}")
+                    cleanup_files([audio_file, wav_file])
+                    continue
 
-                    audio_features = extract_audio_features(wav_file)
-                    if not audio_features:
-                        logging.warning(f"❌ Skipping feature extraction failure: {song_name}")
-                        continue
+                # Fetch lyrics and mood separately if requested
+                lyrics = fetch_lyrics_from_gemini_only(song_name, artist_name)
+                if not lyrics:
+                    log_missing_lyrics(song_name, artist_name, album_name)
+                mood = fetch_mood_from_gemini_only(song_name, artist_name)
+                if mood == "unknown":
+                    mood = predict_mood_from_audio_features(audio_features)
 
-                    lyrics, mood = fetch_lyrics_and_mood(song_name, artist_name, song_meta["album"]["name"])
+                lyrics_available = bool(lyrics)  # ✅ define lyrics_available
 
-                    song_record = {
-                        "name": song_name,
-                        "album": song_meta["album"]["name"],
-                        "artist": ", ".join([artist["name"] for artist in song_meta["artists"]]),
-                        "id": song_meta["id"],
-                        "release_date": song_meta["album"]["release_date"],
-                        "popularity": song_meta["popularity"],
-                        "mood": mood or "unknown",
-                        "lyrics_available": bool(lyrics),
-                        **audio_features
-                    }
+                if lyrics_available:
+                    save_lyrics(lyrics, album_name, song_name)
 
-                    songs_data.append(song_record)
+                song_record = {
+                    "name": song_name,
+                    "album": album_name,
+                    "artist": ", ".join([artist["name"] for artist in song_meta["artists"]]),
+                    "id": song_meta["id"],
+                    "release_date": song_meta["album"]["release_date"],
+                    "popularity": song_meta["popularity"],
+                    "mood": mood or "unknown",
+                    "lyrics_available": lyrics_available,
+                    **audio_features
+                }
 
-                except Exception as song_err:
-                    logging.error(f"❌ Failed to process '{song_name}': {song_err}")
-                finally:
-                    cleanup_files(filter(None, [audio_file, wav_file]))
+                songs_data.append(song_record)
+                cleanup_files([audio_file, wav_file])
 
     except Exception as e:
         logging.error(f"🔥 Error processing album {album_id} ({movie_name}): {e}")
 
     return songs_data
-
 
 def save_progress(processed_movies, filename="processed_movies.txt"):
     try:
@@ -496,46 +535,32 @@ def process_movie_csv(file_path, processed_movies):
     print(f"📂 Processing file: {file_path}")
     df = pd.read_csv(file_path)
     df.columns = df.columns.str.strip()
-
     for _, row in tqdm(df.iterrows(), total=len(df), desc=f"🎬 {os.path.basename(file_path)}", unit="movie"):
         movie_name = row.get("Title", "").strip()
         if not movie_name or movie_name in processed_movies:
             continue
-
         try:
             release_date = row.get("Release Date", "")
             year = datetime.strptime(str(release_date), "%d-%m-%Y").year
             language = row.get("Language", "").strip()
             hero = row.get("Hero", "").strip()
             music_director = row.get("Music Director", "").strip()
-
             album_id = search_album_on_spotify(movie_name, year, language, music_director, hero)
             songs = get_songs_from_album(album_id, movie_name)
-
             if songs:
                 output_df = pd.DataFrame(songs)
                 folder_path = os.path.join("output", sanitize_filename(language), str(year))
                 os.makedirs(folder_path, exist_ok=True)
                 output_file = os.path.join(folder_path, "songs.csv")
-
                 if os.path.exists(output_file):
                     existing_df = pd.read_csv(output_file)
-
-                    # Harmonize columns for safe concat
-                    all_columns = sorted(set(existing_df.columns) | set(output_df.columns))
-                    existing_df = existing_df.reindex(columns=all_columns, fill_value="")
-                    output_df = output_df.reindex(columns=all_columns, fill_value="")
-
                     output_df = pd.concat([existing_df, output_df], ignore_index=True)
-
                 output_df.to_csv(output_file, index=False)
                 print(f"✅ Saved {len(songs)} songs for '{movie_name}' → {output_file}")
             else:
                 print(f"⚠ No songs found for: {movie_name}")
-
         except Exception as e:
             print(f"❌ Error processing movie '{movie_name}': {e}")
-
         processed_movies.add(movie_name)
         save_progress(processed_movies)
 
@@ -544,27 +569,22 @@ def process_all_csv_files():
     if not os.path.exists(MOVIE_CSV_FOLDER):
         print(f"❌ Folder '{MOVIE_CSV_FOLDER}' does not exist!")
         return
-
-    # Recursively find all CSVs
+    # Recursively gather all CSV files in subfolders
     csv_files = []
     for root, _, files in os.walk(MOVIE_CSV_FOLDER):
         for file in files:
             if file.lower().endswith(".csv"):
                 csv_files.append(os.path.join(root, file))
-
     if not csv_files:
         print("❌ No CSV files found in 'movie_csvs' or subfolders!")
         return
-
     print(f"✅ Found {len(csv_files)} CSV files across language folders. Processing now...")
     processed_movies = load_processed_movies()
-
     for file in tqdm(csv_files, desc="📁 CSV Files", unit="file"):
         try:
             process_movie_csv(file, processed_movies)
         except Exception as e:
             print(f"⚠ Error processing file {file}: {e}")
-
     print("🎉 All CSV files processed successfully.")
 
 if __name__ == "__main__":

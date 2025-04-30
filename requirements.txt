@@ -9,3 +9,6 @@ pydub
 filelock
 lyricsgenius
 ffmpeg-python
+scikit-learn
+joblib
+google-generativeai
