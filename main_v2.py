@@ -273,7 +273,7 @@ def extract_audio_features(file_path):
 
         features = {
             "duration_ms": int(duration * 1000),
-            "tempo": float(tempo),
+            "tempo": float(tempo.item()) if hasattr(tempo, 'item') else float(tempo),
             "danceability": normalize(np.std(np.diff(tempogram)), 0, 0.5),
             "acousticness": normalize(np.mean(zcr), 0, 0.2),
             "energy": normalize(np.mean(rms), 0, 0.1),
@@ -679,7 +679,7 @@ def process_movie_csv(file_path, processed_movies):
             print(f"❌ Error processing movie '{movie_name}': {e}")
         processed_movies.add(movie_name)
         save_progress(processed_movies)
-        
+
 def process_all_csv_files():
     MOVIE_CSV_FOLDER = "movie_csvs"
     
