@@ -649,59 +649,37 @@ def load_processed_movies(filename="processed_movies.txt"):
 
 def process_movie_csv(file_path, processed_movies):
     print(f"📂 Processing file: {file_path}")
-    
-    try:
-        df = pd.read_csv(file_path)
-    except Exception as e:
-        print(f"❌ Failed to read CSV: {file_path} — {e}")
-        return
-
+    df = pd.read_csv(file_path)
     df.columns = df.columns.str.strip()
-
     for _, row in tqdm(df.iterrows(), total=len(df), desc=f"🎬 {os.path.basename(file_path)}", unit="movie"):
+        movie_name = row.get("Title", "").strip()
+        if not movie_name or movie_name in processed_movies:
+            continue
         try:
-            movie_name = row.get("Title", "").strip()
-            if not movie_name or movie_name in processed_movies:
-                continue
-
             release_date = row.get("Release Date", "")
-            try:
-                year = datetime.strptime(str(release_date), "%d-%m-%Y").year
-            except Exception:
-                print(f"⚠ Invalid release date '{release_date}' for movie '{movie_name}'. Skipping...")
-                processed_movies.add(movie_name)
-                continue
-
+            year = datetime.strptime(str(release_date), "%d-%m-%Y").year
             language = row.get("Language", "").strip()
             hero = row.get("Hero", "").strip()
             music_director = row.get("Music Director", "").strip()
-
             album_id = search_album_on_spotify(movie_name, year, language, music_director, hero)
             songs = get_songs_from_album(album_id, movie_name)
-
             if songs:
                 output_df = pd.DataFrame(songs)
                 folder_path = os.path.join("output", sanitize_filename(language), str(year))
                 os.makedirs(folder_path, exist_ok=True)
                 output_file = os.path.join(folder_path, "songs.csv")
-
                 if os.path.exists(output_file):
-                    try:
-                        existing_df = pd.read_csv(output_file)
-                        output_df = pd.concat([existing_df, output_df], ignore_index=True)
-                    except Exception as e:
-                        print(f"⚠ Error reading existing output file: {e}")
-
+                    existing_df = pd.read_csv(output_file)
+                    output_df = pd.concat([existing_df, output_df], ignore_index=True)
                 output_df.to_csv(output_file, index=False)
                 print(f"✅ Saved {len(songs)} songs for '{movie_name}' → {output_file}")
             else:
                 print(f"⚠ No songs found for: {movie_name}")
         except Exception as e:
             print(f"❌ Error processing movie '{movie_name}': {e}")
-        finally:
-            processed_movies.add(movie_name)
-            save_progress(processed_movies)
-
+        processed_movies.add(movie_name)
+        save_progress(processed_movies)
+        
 def process_all_csv_files():
     MOVIE_CSV_FOLDER = "movie_csvs"
     
