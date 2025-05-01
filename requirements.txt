@@ -1,14 +1,13 @@
 spotipy
 pandas
-python-dotenv
 yt-dlp
 librosa
 numpy
 tqdm
 pydub
+python-dotenv
 filelock
-lyricsgenius
-ffmpeg-python
+google-generativeai
 scikit-learn
 joblib
-google-generativeai
+google-genai
