@@ -485,7 +485,7 @@ def fetch_lyrics_from_gemini_only(song_name, artist_name):
     rejection_phrases = [
         "i'm sorry", "i am sorry", "i cannot provide", "i couldn’t find",
         "no lyrics available", "unable to provide", "due to copyright",
-        "limitations in the search", "here is a snippet", "partial lyrics", "not the full lyrics"
+        "limitations in the search", "here is a snippet", "partial lyrics", "not the full lyrics","I was unable to find the lyrics"
     ]
 
     print(f"🎤 Attempting Gemini lyrics search for: {song_name} by {artist_name}")
